@@ -1,6 +1,5 @@
 # Dependências
 node_modules/
-
 # Variáveis de Ambiente (CRÍTICO)
 .env
 .env.local
@@ -26,3 +25,10 @@ DerivedData/
 # Outros
 .DS_Store
 Thumbs.db
+node_modules/
+.expo/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env

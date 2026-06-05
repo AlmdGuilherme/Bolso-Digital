@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "903770581223",
+    "project_id": "bolso-digital-a8154",
+    "storage_bucket": "bolso-digital-a8154.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:903770581223:android:2aad89bea1fd82d94bda42",
+        "android_client_info": {
+          "package_name": "com.bolsodigital.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBqHRKRb4kqqL8pA1rpqpHnZhNatlFKqFQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
