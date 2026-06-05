@@ -1,0 +1,28 @@
+# Dependências
+node_modules/
+
+# Variáveis de Ambiente (CRÍTICO)
+.env
+.env.local
+.env.*.local
+
+# Expo (se estiver usando)
+.expo/
+dist/
+
+# Android
+build/
+*.keystore
+!debug.keystore
+capture_queries.txt
+
+# iOS
+build/
+DerivedData/
+*.app
+*.ipa
+*.vvevent
+
+# Outros
+.DS_Store
+Thumbs.db

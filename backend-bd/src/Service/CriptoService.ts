@@ -1,0 +1,3 @@
+class CriptoService {
+  
+}
