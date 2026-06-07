@@ -1,361 +1,434 @@
-import { pool } from "../database/database.js";
+import { supabase } from "../database/database.js";
 import type { CreateTransactionDTO } from "../Interface/CreateTransactionDTO.js";
 import * as DBQuery from '../database/queries.js'
 
 export class TransactionService {
+
+  private calculateDistanceKm(
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number
+  ) {
+    const R = 6371;
+
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+
+    return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+  }
+
+  private async detectFraud(
+    transactionId: string,
+    accountNumber: string,
+    latitude: number,
+    longitude: number
+  ) {
+    const { data: recentTransactions } = await DBQuery.GET_RECENT_TRANSACTIONS_WITH_LOCATION(
+      accountNumber,
+      transactionId as any
+    );
+
+    if (!recentTransactions) return;
+
+    for (const transaction of recentTransactions) {
+      const loc = Array.isArray(transaction.transaction_locations)
+        ? transaction.transaction_locations[0]
+        : transaction.transaction_locations;
+
+      if (!loc || loc.latitude === null || loc.longitude === null) continue;
+
+      const distanceKm = this.calculateDistanceKm(
+        latitude,
+        longitude,
+        Number(loc.latitude),
+        Number(loc.longitude)
+      );
+
+      const minutesDiff =
+        Math.abs(
+          new Date().getTime() -
+          new Date(transaction.created_at).getTime()
+        ) /
+        (1000 * 60);
+
+      if (distanceKm >= 5 && minutesDiff <= 15) {
+        const { data: existingAlert } = await DBQuery.CHECK_FRAUD_ALERT_EXISTS(
+          transactionId as any,
+          transaction.id
+        );
+
+        if (existingAlert && existingAlert.length > 0) {
+          continue;
+        }
+
+        await DBQuery.CREATE_FRAUD_ALERT({
+          account_number: accountNumber,
+          transaction_id: transactionId as any,
+          compared_transaction_id: transaction.id,
+          distance_km: Number(distanceKm.toFixed(2)),
+          time_difference_minutes: Math.round(minutesDiff),
+          message: 'Possível fraude detectada. Duas despesas ocorreram em locais distantes em um curto período.'
+        });
+      }
+    }
+  }
+
   async createTransaction(data: CreateTransactionDTO) {
-    const client = await pool.connect();
-
     try {
-      await client.query('BEGIN');
-
-      const status = data.status ?? 'completed';
+      const status = data.status ?? "completed";
 
       if (data.category_id && data.subcategory_id) {
-        const validationQuery = `
-        SELECT id
-        FROM subcategories
-        WHERE id = $1 AND category_id = $2
-      `;
+        const { data: validationRes } = await supabase
+          .from('subcategories')
+          .select('id')
+          .eq('id', data.subcategory_id)
+          .eq('category_id', data.category_id);
 
-        const validationRes = await client.query(validationQuery, [
-          data.subcategory_id,
-          data.category_id,
-        ]);
-
-        if (validationRes.rows.length === 0) {
-          throw new Error('A subcategoria não pertence à categoria informada.');
+        if (!validationRes || validationRes.length === 0) {
+          throw new Error("A subcategoria não pertence à categoria informada.");
         }
       }
 
-      if (status === 'completed' && data.type === 'expense' && data.envelope_id) {
-        const envelopeQuery = `
-        SELECT id, name, current_amount
-        FROM envelopes
-        WHERE id = $1 AND account_number = $2
-        FOR UPDATE
-      `;
+      if (status === "completed" && data.type === "expense" && data.envelope_id) {
+        const { data: envelopeRes } = await supabase
+          .from('envelopes')
+          .select('id, name, current_amount')
+          .eq('id', data.envelope_id)
+          .eq('account_number', data.account_number);
 
-        const envelopeRes = await client.query(envelopeQuery, [
-          data.envelope_id,
-          data.account_number,
-        ]);
-
-        if (envelopeRes.rows.length === 0) {
-          throw new Error('Envelope não encontrado.');
+        if (!envelopeRes || envelopeRes.length === 0) {
+          throw new Error("Envelope não encontrado.");
         }
 
-        const envelope = envelopeRes.rows[0];
+        const envelope = envelopeRes[0];
+
+        if (!envelope) {
+          throw new Error("Envelope não encontrado.");
+        }
 
         if (Number(envelope.current_amount) < data.amount) {
           throw new Error(`Saldo insuficiente no envelope "${envelope.name}".`);
         }
 
-        const updateEnvelopeQuery = `
-        UPDATE envelopes
-        SET current_amount = current_amount - $1
-        WHERE id = $2 AND account_number = $3
-      `;
+        const { error: updateEnvErr } = await supabase
+          .from('envelopes')
+          .update({ current_amount: Number(envelope.current_amount) - data.amount })
+          .eq('id', data.envelope_id)
+          .eq('account_number', data.account_number);
 
-        await client.query(updateEnvelopeQuery, [
-          data.amount,
-          data.envelope_id,
-          data.account_number,
-        ]);
+        if (updateEnvErr) throw updateEnvErr;
       }
 
-      const res = await client.query(DBQuery.CREATE_TRASACTION, [
-        data.account_number,
-        data.description,
-        data.amount,
-        data.type,
-        data.category ?? null,
-        data.subcategory ?? null,
-        data.category_id ?? null,
-        data.subcategory_id ?? null,
-        data.envelope_id ?? null,
-        status,
-      ]);
+      const transactionPayload = {
+        account_number: data.account_number,
+        description: data.description,
+        amount: data.amount,
+        type: data.type,
+        category: data.category ?? null,
+        subcategory: data.subcategory ?? null,
+        category_id: data.category_id ?? null,
+        subcategory_id: data.subcategory_id ?? null,
+        envelope_id: data.envelope_id ?? null,
+        status
+      };
 
-      if (status === 'completed') {
-        const updateBalanceQuery =
-          data.type === 'expense'
-            ? 'UPDATE accounts SET balance = balance - $1 WHERE account_number = $2'
-            : 'UPDATE accounts SET balance = balance + $1 WHERE account_number = $2';
+      const transactionInsert = await DBQuery.CREATE_TRASACTION(transactionPayload);
+      if (transactionInsert.error) throw transactionInsert.error;
 
-        await client.query(updateBalanceQuery, [
-          data.amount,
+      const transaction = Array.isArray(transactionInsert.data)
+        ? transactionInsert.data[0]
+        : transactionInsert.data;
+
+      if (
+        data.type === "expense" &&
+        data.latitude !== undefined &&
+        data.longitude !== undefined
+      ) {
+        const locationPayload = {
+          transaction_id: transaction.id,
+          latitude: data.latitude,
+          longitude: data.longitude,
+          location_name: data.location_name ?? null
+        };
+
+        const locInsert = await DBQuery.INSERT_TRANSACTION_LOCATION(locationPayload);
+        if (locInsert.error) throw locInsert.error;
+
+        await this.detectFraud(
+          transaction.id,
           data.account_number,
-        ]);
+          data.latitude,
+          data.longitude
+        );
       }
 
-      await client.query('COMMIT');
+      if (status === "completed") {
+        const { data: accountRes } = await supabase
+          .from('accounts')
+          .select('balance')
+          .eq('account_number', data.account_number)
+          .single();
 
-      return res.rows[0];
+        const currentBalance = accountRes ? Number(accountRes.balance) : 0;
+        const newBalance = data.type === "expense"
+          ? currentBalance - data.amount
+          : currentBalance + data.amount;
+
+        const { error: balanceErr } = await supabase
+          .from('accounts')
+          .update({ balance: newBalance })
+          .eq('account_number', data.account_number);
+
+        if (balanceErr) throw balanceErr;
+      }
+
+      return transaction;
     } catch (error: any) {
-      await client.query('ROLLBACK');
-
-      if (error.code === '23503') {
-        throw new Error('Categoria ou subcategoria inválida.');
+      if (error.code === "23503") {
+        throw new Error("Categoria, subcategoria ou transação inválida.");
       }
-
       throw error;
-    } finally {
-      client.release();
     }
   }
 
   async getTransactionsByAccount(accountNumber: string) {
-    const result = await pool.query(
-      DBQuery.GET_TRANSACTIONS_BY_ACCOUNT,
-      [accountNumber]
-    );
+    const { data, error } = await DBQuery.GET_TRANSACTIONS_BY_ACCOUNT(accountNumber);
+    if (error) throw error;
 
-    return result.rows;
+    return (data || []).map(t => {
+      const receiptData = Array.isArray(t.transaction_receipts)
+        ? t.transaction_receipts
+        : [t.transaction_receipts].filter(Boolean);
+
+      return {
+        ...t,
+        has_receipt: receiptData.length > 0
+      };
+    });
   }
 
   async getDashboardData(accountNumber: string) {
-    const result = await pool.query(DBQuery.GET_DASHBOARD_DATA, [accountNumber]);
-    return result.rows;
+    const { data, error } = await DBQuery.GET_DASHBOARD_DATA(accountNumber);
+    if (error) throw error;
+    return data || [];
   }
 
   async getBalanceAccountChart(accountNumber: string) {
     const [resBal, resInc, resExp, resSum] = await Promise.all([
-      pool.query(DBQuery.GET_BALANCE_EVOLUTION, [accountNumber]),
-      pool.query(DBQuery.GET_INCOME_EVOLUTION, [accountNumber]),
-      pool.query(DBQuery.GET_EXPENSE_EVOLUTION, [accountNumber]),
-      pool.query(DBQuery.GET_SUMMARY_EVOLUTION, [accountNumber])
+      DBQuery.GET_BALANCE_EVOLUTION(accountNumber),
+      DBQuery.GET_INCOME_EVOLUTION(accountNumber),
+      DBQuery.GET_EXPENSE_EVOLUTION(accountNumber),
+      DBQuery.GET_SUMMARY_EVOLUTION(accountNumber)
     ]);
 
+    if (resBal.error) throw resBal.error;
+    if (resInc.error) throw resInc.error;
+    if (resExp.error) throw resExp.error;
+    if (resSum.error) throw resSum.error;
+
     const totals = { income: 0, expense: 0 };
-    resSum.rows.forEach(row => {
-      if (row.type === 'income') totals.income = parseFloat(row.total);
-      if (row.type === 'expense') totals.expense = parseFloat(row.total);
+    (resSum.data || []).forEach((row: any) => {
+      if (row.type === 'income') totals.income = parseFloat(row.amount);
+      if (row.type === 'expense') totals.expense = parseFloat(Math.abs(row.amount).toString());
     });
 
     return {
       balanceChart: {
-        labels: resBal.rows.map(r => r.label),
-        values: resBal.rows.map(r => parseFloat(r.value))
+        labels: (resBal.data || []).map((r: any) => r.label),
+        values: (resBal.data || []).map((r: any) => parseFloat(r.value))
       },
       incomeChart: {
-        labels: resInc.rows.map(r => r.label),
-        values: resInc.rows.map(r => parseFloat(r.value))
+        labels: (resInc.data || []).map((r: any) => r.label),
+        values: (resInc.data || []).map((r: any) => parseFloat(r.value))
       },
       expenseChart: {
-        labels: resExp.rows.map(r => r.label),
-        values: resExp.rows.map(r => parseFloat(r.value))
+        labels: (resExp.data || []).map((r: any) => r.label),
+        values: (resExp.data || []).map((r: any) => parseFloat(r.value))
       },
       totals
     };
   }
 
   async getCategories() {
-    const query = `
-    SELECT id, name
-    FROM categories
-    ORDER BY name ASC
-  `;
+    const { data, error } = await supabase
+      .from('categories')
+      .select('id, name')
+      .order('name', { ascending: true });
 
-    const result = await pool.query(query);
-    return result.rows;
+    if (error) throw error;
+    return data || [];
   }
 
   async getSubcategoriesByCategory(categoryId: number) {
-    const query = `
-    SELECT id, name, category_id
-    FROM subcategories
-    WHERE category_id = $1
-    ORDER BY name ASC
-  `;
+    const { data, error } = await supabase
+      .from('subcategories')
+      .select('id, name, category_id')
+      .eq('category_id', categoryId)
+      .order('name', { ascending: true });
 
-    const result = await pool.query(query, [categoryId]);
-    return result.rows;
+    if (error) throw error;
+    return data || [];
   }
 
   async getDailyExpenses(account_number: string) {
-    const result = await pool.query(DBQuery.GET_DAILY_EXPENSES, [account_number])
-    return result.rows;
+    const { data, error } = await DBQuery.GET_DAILY_EXPENSES(account_number);
+    if (error) throw error;
+    return data || [];
   }
 
-
   async confirmPendingTransaction(transactionId: number, accountNumber: string) {
-    const client = await pool.connect();
-
     try {
-      await client.query('BEGIN');
+      const { data: transactionRes, error: fetchErr } = await supabase
+        .from('transactions')
+        .select('id, account_number, amount, type, status')
+        .eq('id', transactionId)
+        .eq('account_number', accountNumber);
 
-      const transactionRes = await client.query(
-        `
-        SELECT id, account_number, amount, type, status
-        FROM transactions
-        WHERE id = $1 AND account_number = $2
-        FOR UPDATE
-      `,
-        [transactionId, accountNumber]
-      );
-
-      if (transactionRes.rows.length === 0) {
+      if (fetchErr) throw fetchErr;
+      const transaction = transactionRes?.[0];
+      if (!transaction) {
         throw new Error('Transação não encontrada.');
       }
-
-      const transaction = transactionRes.rows[0];
-
       if (transaction.status !== 'pending') {
         throw new Error('Essa transação não está pendente.');
       }
+      const { data: accountRes } = await supabase
+        .from('accounts')
+        .select('balance')
+        .eq('account_number', accountNumber)
+        .single();
 
-      const updateBalanceQuery =
-        transaction.type === 'expense'
-          ? 'UPDATE accounts SET balance = balance - $1 WHERE account_number = $2'
-          : 'UPDATE accounts SET balance = balance + $1 WHERE account_number = $2';
+      const currentBalance = accountRes ? Number(accountRes.balance) : 0;
+      const newBalance = transaction.type === 'expense'
+        ? currentBalance - Number(transaction.amount)
+        : currentBalance + Number(transaction.amount);
 
-      await client.query(updateBalanceQuery, [
-        transaction.amount,
-        accountNumber,
-      ]);
+      const { error: balanceErr } = await supabase
+        .from('accounts')
+        .update({ balance: newBalance })
+        .eq('account_number', accountNumber);
 
-      const updateTransactionRes = await client.query(
-        `
-        UPDATE transactions
-        SET status = 'completed'
-        WHERE id = $1 AND account_number = $2
-        RETURNING *
-      `,
-        [transactionId, accountNumber]
-      );
+      if (balanceErr) throw balanceErr;
 
-      await client.query('COMMIT');
+      const { data: updateTransactionRes, error: updateTxErr } = await supabase
+        .from('transactions')
+        .update({ status: 'completed' })
+        .eq('id', transactionId)
+        .eq('account_number', accountNumber)
+        .select('*');
 
-      return updateTransactionRes.rows[0];
+      if (updateTxErr) throw updateTxErr;
+
+      return updateTransactionRes[0];
     } catch (error) {
-      await client.query('ROLLBACK');
       throw error;
-    } finally {
-      client.release();
     }
   }
 
   async cancelPendingTransaction(transactionId: number, accountNumber: string) {
-    const result = await pool.query(
-      `
-      UPDATE transactions
-      SET status = 'cancelled'
-      WHERE id = $1
-      AND account_number = $2
-      AND status = 'pending'
-      RETURNING *
-    `,
-      [transactionId, accountNumber]
-    );
+    const { data, error } = await supabase
+      .from('transactions')
+      .update({ status: 'cancelled' })
+      .eq('id', transactionId)
+      .eq('account_number', accountNumber)
+      .eq('status', 'pending')
+      .select('*');
 
-    if (result.rows.length === 0) {
+    if (error) throw error;
+    if (!data || data.length === 0) {
       throw new Error('Transação pendente não encontrada.');
     }
 
-    return result.rows[0];
+    return data[0];
   }
 
   async getPendingTransactions(accountNumber: string) {
-    const result = await pool.query(
-      `
-      SELECT *
-      FROM transactions
-      WHERE account_number = $1
-      AND status = 'pending'
-      ORDER BY created_at DESC
-    `,
-      [accountNumber]
-    );
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('account_number', accountNumber)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false });
 
-    return result.rows;
+    if (error) throw error;
+    return data || [];
   }
 
   async addReceipt(transactionId: string, accountNumber: string, imageUri: string) {
-    const transactionRes = await pool.query(
-      `
-    SELECT id
-    FROM transactions
-    WHERE id = $1
-    AND account_number = $2
-    AND type = 'expense'
-    `,
-      [transactionId, accountNumber]
-    );
+    const { data: transactionRes, error: txErr } = await supabase
+      .from('transactions')
+      .select('id')
+      .eq('id', transactionId)
+      .eq('account_number', accountNumber)
+      .eq('type', 'expense');
 
-    if (transactionRes.rows.length === 0) {
+    if (txErr) throw txErr;
+    if (!transactionRes || transactionRes.length === 0) {
       throw new Error("Despesa não encontrada.");
     }
 
-    const result = await pool.query(
-      `
-    INSERT INTO transaction_receipts (
-      transaction_id,
-      image_uri
-    )
-    VALUES ($1, $2)
-    RETURNING *
-    `,
-      [transactionId, imageUri]
-    );
+    const { data, error } = await supabase
+      .from('transaction_receipts')
+      .insert([{ transaction_id: transactionId, image_uri: imageUri }])
+      .select('*');
 
-    return result.rows[0];
+    if (error) throw error;
+    return data[0];
   }
 
   async getReceiptsByTransaction(transactionId: string, accountNumber: string) {
-    const transactionRes = await pool.query(
-      `
-    SELECT id
-    FROM transactions
-    WHERE id = $1
-    AND account_number = $2
-    `,
-      [transactionId, accountNumber]
-    );
+    const { data: transactionRes, error: txErr } = await supabase
+      .from('transactions')
+      .select('id')
+      .eq('id', transactionId)
+      .eq('account_number', accountNumber);
 
-    if (transactionRes.rows.length === 0) {
+    if (txErr) throw txErr;
+    if (!transactionRes || transactionRes.length === 0) {
       throw new Error("Transação não encontrada.");
     }
 
-    const result = await pool.query(
-      `
-    SELECT *
-    FROM transaction_receipts
-    WHERE transaction_id = $1
-    ORDER BY created_at DESC
-    `,
-      [transactionId]
-    );
+    const { data, error } = await supabase
+      .from('transaction_receipts')
+      .select('*')
+      .eq('transaction_id', transactionId)
+      .order('created_at', { ascending: false });
 
-    return result.rows;
+    if (error) throw error;
+    return data || [];
   }
 
   async deleteReceipt(receiptId: string, accountNumber: string) {
-    const result = await pool.query(
-      `
-    DELETE FROM transaction_receipts tr
-    USING transactions t
-    WHERE tr.transaction_id = t.id
-    AND tr.id = $1
-    AND t.account_number = $2
-    RETURNING tr.*
-    `,
-      [receiptId, accountNumber]
-    );
+    const { data: trRes, error: fetchErr } = await supabase
+      .from('transaction_receipts')
+      .select('id, transaction_id, transactions!inner(account_number)')
+      .eq('id', receiptId)
+      .eq('transactions.account_number', accountNumber);
 
-    if (result.rows.length === 0) {
+    if (fetchErr || !trRes || trRes.length === 0) {
       throw new Error("Recibo não encontrado.");
     }
 
-    return result.rows[0];
+    const { data, error } = await supabase
+      .from('transaction_receipts')
+      .delete()
+      .eq('id', receiptId)
+      .select('*');
+
+    if (error) throw error;
+    return data[0];
   }
 
   async detectFixedExpenses(accountNumber: string) {
-    const result = await pool.query(DBQuery.GET_CONCLUDED_EXPENSES, [
-      accountNumber,
-    ]);
-
-    const expenses = result.rows;
+    const { data: expenses, error } = await DBQuery.GET_CONCLUDED_EXPENSES(accountNumber);
+    if (error || !expenses) return [];
 
     const groupedExpenses = new Map<string, any[]>();
 
@@ -419,12 +492,8 @@ export class TransactionService {
   }
 
   async exportTransactionsCSV(accountNumber: string) {
-    const result = await pool.query(
-      DBQuery.GET_TRANSACTIONS_BY_ACCOUNT,
-      [accountNumber]
-    );
-
-    const transactions = result.rows;
+    const { data: transactions, error } = await DBQuery.GET_TRANSACTIONS_BY_ACCOUNT(accountNumber);
+    if (error || !transactions) return '';
 
     const headers = [
       'Data',
@@ -461,5 +530,28 @@ export class TransactionService {
     ].join('\n');
 
     return csv;
+  }
+
+  async getSuggestedGeofences(accountNumber: string) {
+    const { data, error } = await DBQuery.GET_SUGGESTED_GEOFENCES(accountNumber);
+    if (error || !data) return [];
+
+    return data.map((item: any) => ({
+      identifier: `${String(item.category)
+        .toLowerCase()
+        .replace(/\s+/g, '_')}_${item.latitude_group}_${item.longitude_group}`,
+      category: item.category,
+      latitude: Number(item.latitude),
+      longitude: Number(item.longitude),
+      radius: 150,
+      transaction_count: Number(item.transaction_count),
+      total_amount: Number(item.total_amount),
+    }));
+  }
+
+  async getFraudAlerts(accountNumber: string) {
+    const { data, error } = await DBQuery.GET_FRAUD_ALERTS(accountNumber);
+    if (error) throw error;
+    return data || [];
   }
 }

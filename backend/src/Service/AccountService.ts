@@ -1,204 +1,206 @@
 import argon2 from "argon2";
 import type { Account } from "../Entity/Account.js";
-import { pool } from "../database/database.js";
 import * as DBQuery from '../database/queries.js'
-import { v4 as uuidv4, type UUIDTypes } from "uuid";
+import type { UUIDTypes } from "uuid";
 import type { UpdateUserDTO } from "../Interface/UpdateUserDTO.js";
+import { supabase } from "../database/database.js";
 
 class AccountService {
   async createUser(accountData: Account) {
-    const client = await pool.connect();
     try {
-      await client.query("BEGIN");
+      const addressData = {
+        cep: accountData.user.address.getCep(),
+        street: accountData.user.address.getStreet(),
+        neighborhood: accountData.user.address.getNeighborhood(),
+        city: accountData.user.address.getCity(),
+        state: accountData.user.address.getState(),
+        number: accountData.user.address.getNumber(),
+        complement: accountData.user.address.getComplement()
+      };
 
-      const addressValues = [
-        accountData.user.address.getCep(),
-        accountData.user.address.getStreet(),
-        accountData.user.address.getNeighborhood(),
-        accountData.user.address.getCity(),
-        accountData.user.address.getState(),
-        accountData.user.address.getNumber(),
-        accountData.user.address.getComplement()
-      ]
+      const addressInsert = await DBQuery.ADDRESS_INTSERT(addressData);
+      if (addressInsert.error) throw addressInsert.error;
+      const addressId = addressInsert.data.id;
 
-      const addressInsert = await client.query(DBQuery.ADDRESS_INTSERT, addressValues);
-      const addressId = addressInsert.rows[0].id
+      const userData = {
+        name: accountData.user.getName(),
+        surname: accountData.user.getSurname(),
+        birth_date: accountData.user.getBirthDateFormated(),
+        cpf: accountData.user.getCPF(),
+        address_id: addressId
+      };
 
-      const userValues = [
-        accountData.user.getName(),
-        accountData.user.getSurname(),
-        accountData.user.getBirthDateFormated(),
-        accountData.user.getCPF(),
-        addressId,
-      ];
-
-      const userInsert = await client.query(DBQuery.USER_INSERT, userValues);
-      const userId = userInsert.rows[0].id
+      const userInsert = await DBQuery.USER_INSERT(userData);
+      if (userInsert.error) throw userInsert.error;
+      const userId = userInsert.data.id;
 
       const hashedPassword = await argon2.hash(accountData.getPassword());
       const hashedPin = await argon2.hash(accountData.getPin());
-      const accoutValues = [
-        accountData.getAccountNumber(),
-        accountData.getEmail(),
-        hashedPassword,
-        hashedPin,
-        accountData.getPhone(),
-        userId
-      ]
 
-      await client.query(DBQuery.ACCOUNT_INSERT, accoutValues);
-      await client.query("COMMIT")
-      return { message: "Conta criada com sucesso!" }
+      const accountPayload = {
+        account_number: accountData.getAccountNumber(),
+        email: accountData.getEmail(),
+        password: hashedPassword,
+        pin: hashedPin,
+        phone: accountData.getPhone(),
+        user_id: userId
+      };
+
+      const accountInsert = await DBQuery.ACCOUNT_INSERT(accountPayload);
+      if (accountInsert.error) throw accountInsert.error;
+
+      return { message: "Conta criada com sucesso!" };
     } catch (error) {
-      await client.query("ROLLBACK");
       throw error;
-    } finally {
-      client.release()
     }
   }
 
   async readUser(id: any) {
-    const userData = await pool.query(DBQuery.GET_USER, [+id])
-    if (userData.rows.length === 0) {
-      throw new Error("Usuário não encontrado!")
+    const { data, error } = await DBQuery.GET_USER(+id);
+    
+    if (error || !data) {
+      throw new Error("Usuário não encontrado!");
     }
 
-    const user = userData.rows[0];
+    const accountData = Array.isArray(data.accounts) ? data.accounts[0] : data.accounts;
+
     return {
-      name: user.name,
-      surname: user.surname,
-      cpf: user.cpf,
-      email: user.email
-    }
+      name: data.name,
+      surname: data.surname,
+      cpf: data.cpf,
+      email: accountData?.email
+    };
   }
 
   async readUserAccount(id: any) {
-    const userData = await pool.query(DBQuery.GET_USER_ACCOUNT, [+id])
-    if (userData.rows.length === 0) {
-      throw new Error("Usuário não encontrado!")
+    const { data, error } = await DBQuery.GET_USER_ACCOUNT(+id);
+
+    if (error || !data) {
+      throw new Error("Usuário não encontrado!");
     }
 
-    const user = userData.rows[0];
+    const accountData = Array.isArray(data.accounts) ? data.accounts[0] : data.accounts;
+
     return {
-      id: user.id,
-      name: user.name,
-      surname: user.surname,
-      cpf: user.cpf,
-      email: user.email,
-      balance: user.balance,
-      account_number: user.account_number,
-      phone: user.phone
-    }
+      id: data.id,
+      name: data.name,
+      surname: data.surname,
+      cpf: data.cpf,
+      email: accountData?.email,
+      balance: accountData?.balance,
+      account_number: accountData?.account_number,
+      phone: accountData?.phone
+    };
   }
 
   async userData(id: UUIDTypes) {
-    const userData = await pool.query(DBQuery.GET_USER_DATA, [id]);
-    if (userData.rows.length === 0) {
-      throw new Error("Usuário não encontrado!")
+    const { data, error } = await DBQuery.GET_USER_DATA(id as any);
+
+    if (error || !data) {
+      throw new Error("Usuário não encontrado!");
     }
-    const user = userData.rows[0];
+
+    const accountData = Array.isArray(data.accounts) ? data.accounts[0] : data.accounts;
+
     return {
-      id: user.id,
-      name: user.name,
-      surname: user.surname,
-      cpf: user.cpf,
-      email: user.email,
-      account_number: user.account_number,
-      balance: user.balance,
-      password: user.password,
-      pin: user.pin,
-      phone: user.phone
-    }
+      id: data.id,
+      name: data.name,
+      surname: data.surname,
+      cpf: data.cpf,
+      email: accountData?.email,
+      account_number: accountData?.account_number,
+      balance: accountData?.balance,
+      password: accountData?.password,
+      pin: accountData?.pin,
+      phone: accountData?.phone
+    };
   }
 
   async updateUser(id: UUIDTypes, updateData: UpdateUserDTO) {
-    const user = await this.userData(id)
-    const userId = user.id
+    const user = await this.userData(id);
+    const userId = user.id;
 
-    const emailToValide = updateData.email !== user.email ? updateData.email : undefined
-    const cpfToValidate = updateData.cpf !== user.cpf ? updateData.cpf : undefined
-    const phoneToValidate = updateData.phone !== user.phone ? updateData.phone : undefined
+    const emailToValide = updateData.email !== user.email ? updateData.email : undefined;
+    const cpfToValidate = updateData.cpf !== user.cpf ? updateData.cpf : undefined;
+    const phoneToValidate = updateData.phone !== user.phone ? updateData.phone : undefined;
+    
     if (emailToValide || cpfToValidate || phoneToValidate) {
-      await this.checkIfUserExists(emailToValide, cpfToValidate, phoneToValidate)
+      await this.checkIfUserExists(emailToValide, cpfToValidate, phoneToValidate);
     }
 
-    const finalName = updateData.name ?? user.name
-    const finalSurname = updateData.surname ?? user.surname
-    const finalCpf = updateData.cpf ?? user.cpf
-    const finalEmail = updateData.email ?? user.email
-    const finalPassword = updateData.password ? await argon2.hash(updateData.password) : user.password
-    const finalPin = updateData.pin ? await argon2.hash(updateData.pin) : user.pin
-    const finalPhone = updateData.phone ?? user.phone
+    const finalName = updateData.name ?? user.name;
+    const finalSurname = updateData.surname ?? user.surname;
+    const finalCpf = updateData.cpf ?? user.cpf;
+    const finalEmail = updateData.email ?? user.email;
+    const finalPassword = updateData.password ? await argon2.hash(updateData.password) : user.password;
+    const finalPin = updateData.pin ? await argon2.hash(updateData.pin) : user.pin;
+    const finalPhone = updateData.phone ?? user.phone;
 
-    const client = await pool.connect()
     try {
-      await client.query("BEGIN")
+      const userUpdate = await DBQuery.UPDATE_USER_DATA(userId, { name: finalName, surname: finalSurname, cpf: finalCpf });
+      if (userUpdate.error) throw userUpdate.error;
 
-      await client.query(DBQuery.UPDATE_USER_DATA, [finalName, finalSurname, finalCpf, userId])
-      await client.query(DBQuery.UPDATE_ACCOUNT_DATA, [finalEmail, finalPassword, finalPin, finalPhone, userId])
+      const accountUpdate = await DBQuery.UPDATE_ACCOUNT_DATA(userId, { email: finalEmail, password: finalPassword, pin: finalPin, phone: finalPhone });
+      if (accountUpdate.error) throw accountUpdate.error;
 
-      await client.query("COMMIT")
-      return { message: "Conta atualizada com sucesso!" }
+      return { message: "Conta actualizada com sucesso!" };
     } catch (error) {
-      await client.query("ROLLBACK")
-      throw error
-    } finally {
-      client.release()
+      throw error;
     }
   }
 
   async deleteUser(id: UUIDTypes) {
-    const client = await pool.connect();
     try {
-      await client.query("BEGIN")
+      const userDelete = await DBQuery.DELETE_USER(id as any);
+      if (userDelete.error) throw userDelete.error;
+      
+      const addressId = userDelete.data?.address_id;
+      if (addressId) {
+        const addressDelete = await DBQuery.DELETE_ADDRESS(addressId);
+        if (addressDelete.error) throw addressDelete.error;
+      }
 
-      const result = await client.query(DBQuery.DELETE_USER, [id])
-      const addressId = result.rows[0]?.address_id
-      if (addressId) await client.query(DBQuery.DELETE_ADDRESS, [addressId])
-      await client.query("COMMIT")
-      return { message: "Dados do usuário deletados com sucesso!" }
+      return { message: "Dados do usuário deletados com sucesso!" };
     } catch (error) {
-      await client.query("ROLLBACK")
-      throw error
-    } finally {
-      client.release();
+      throw error;
     }
   }
 
   async checkIfUserExists(email?: string, cpf?: string, phone?: string) {
     if (email) {
-      const doesEmailExists = await pool.query(DBQuery.VERIFY_EMAIL, [email])
-      if (doesEmailExists.rows.length > 0) {
-        throw new Error("Email já cadastrado!")
+      const { data } = await DBQuery.VERIFY_EMAIL(email);
+      if (data && data.length > 0) {
+        throw new Error("Email já cadastrado!");
       }
     }
 
     if (cpf) {
-      const doesCPFExists = await pool.query(DBQuery.VERIFY_CPF, [cpf]);
-      if (doesCPFExists.rows.length > 0) {
-        throw new Error("CPF já cadastrado!")
+      const { data } = await DBQuery.VERIFY_CPF(cpf);
+      if (data && data.length > 0) {
+        throw new Error("CPF já cadastrado!");
       }
     }
 
     if (phone) {
-      const doesPhoneExists = await pool.query(DBQuery.VERIFY_PHONE, [phone]);
-      if (doesPhoneExists.rows.length > 0) {
-        throw new Error("Telefone já cadastrado!")
+      const { data } = await DBQuery.VERIFY_PHONE(phone);
+      if (data && data.length > 0) {
+        throw new Error("Telefone já cadastrado!");
       }
     }
   }
 
   async updateUserPin(userId: string, pin: string) {
-    const hashedPin = await argon2.hash(pin)
+    const hashedPin = await argon2.hash(pin);
 
-    await pool.query(
-      `UPDATE accounts SET pin = $1 WHERE user_id = $2`,
-      [hashedPin, userId]
-    )
+    const { error } = await supabase
+      .from('accounts')
+      .update({ pin: hashedPin })
+      .eq('user_id', userId);
 
-    return { message: "PIN atualizado com sucesso!" }
+    if (error) throw error;
+
+    return { message: "PIN atualizado com sucesso!" };
   }
-
 }
 
-export { AccountService }
+export { AccountService };

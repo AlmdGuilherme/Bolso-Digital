@@ -1,4 +1,4 @@
-import { pool } from "../database/database.js";
+import { supabase } from "../database/database.js";
 
 type CreateGoalDTO = {
   account_number: string;
@@ -17,7 +17,7 @@ export class GoalService {
   async createGoal(data: CreateGoalDTO) {
     const trimmedName = data.name?.trim();
     const autoDeposit = data.auto_deposit ?? false;
-    const nextDepositDate = autoDeposit ? this.getNextDepositDate() : null;
+    const nextDepositDate = autoDeposit ? this.getNextDepositDate().toISOString() : null;
 
     if (!data.account_number) {
       throw new Error("Número da conta é obrigatório.");
@@ -35,82 +35,57 @@ export class GoalService {
       throw new Error("O depósito mensal deve ser maior que zero.");
     }
 
-    const existingGoal = await pool.query(
-      `
-        SELECT id
-        FROM goals
-        WHERE account_number = $1
-          AND LOWER(name) = LOWER($2)
-      `,
-      [data.account_number, trimmedName]
-    );
+    const { data: existingGoal, error: fetchErr } = await supabase
+      .from('goals')
+      .select('id')
+      .eq('account_number', data.account_number)
+      .ilike('name', trimmedName);
 
-    if (existingGoal.rows.length > 0) {
+    if (fetchErr) throw fetchErr;
+    if (existingGoal && existingGoal.length > 0) {
       throw new Error("Já existe uma meta com esse nome nesta conta.");
     }
 
-    const result = await pool.query(
-      `
-        INSERT INTO goals (
-          account_number,
-          name,
-          target_amount,
-          current_amount,
-          monthly_deposit,
-          auto_deposit,
-          next_deposit_date
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING *
-      `,
-      [
-        data.account_number,
-        trimmedName,
-        data.target_amount,
-        0,
-        data.monthly_deposit,
-        autoDeposit,
-        nextDepositDate
-      ]
-    );
+    const { data: result, error: insertErr } = await supabase
+      .from('goals')
+      .insert([{
+        account_number: data.account_number,
+        name: trimmedName,
+        target_amount: data.target_amount,
+        current_amount: 0,
+        monthly_deposit: data.monthly_deposit,
+        auto_deposit: autoDeposit,
+        next_deposit_date: nextDepositDate
+      }])
+      .select('*');
 
-    return result.rows[0];
+    if (insertErr) throw insertErr;
+    return result[0];
   }
 
   async getGoalsByAccount(accountNumber: string) {
-    const result = await pool.query(
-      `
-        SELECT
-          id,
-          account_number,
-          name,
-          target_amount,
-          current_amount,
-          monthly_deposit,
-          auto_deposit,
-          next_deposit_date,
-          created_at,
-          CASE
-            WHEN target_amount > 0
-              THEN ROUND((current_amount / target_amount) * 100, 2)
-            ELSE 0
-          END AS progress
-        FROM goals
-        WHERE account_number = $1
-        ORDER BY created_at DESC
-      `,
-      [accountNumber]
-    );
+    const { data, error } = await supabase
+      .from('goals')
+      .select('id, account_number, name, target_amount, current_amount, monthly_deposit, auto_deposit, next_deposit_date, created_at')
+      .eq('account_number', accountNumber)
+      .order('created_at', { ascending: false });
 
-    return result.rows;
+    if (error) throw error;
+
+    return (data || []).map(goal => {
+      const target = Number(goal.target_amount);
+      const current = Number(goal.current_amount);
+      const progress = target > 0 ? Number(((current / target) * 100).toFixed(2)) : 0;
+
+      return {
+        ...goal,
+        progress
+      };
+    });
   }
 
   async depositToGoal(goalId: number, amount: number) {
-    const client = await pool.connect();
-
     try {
-      await client.query("BEGIN");
-
       if (!goalId) {
         throw new Error("Id da meta é obrigatório.");
       }
@@ -119,37 +94,31 @@ export class GoalService {
         throw new Error("O valor do depósito deve ser maior que zero.");
       }
 
-      const goalResult = await client.query(
-        `
-          SELECT *
-          FROM goals
-          WHERE id = $1
-          FOR UPDATE
-        `,
-        [goalId]
-      );
+      const { data: goalRes, error: goalErr } = await supabase
+        .from('goals')
+        .select('*')
+        .eq('id', goalId);
 
-      if (goalResult.rows.length === 0) {
+      if (goalErr) throw goalErr;
+      if (!goalRes || goalRes.length === 0) {
         throw new Error("Meta não encontrada.");
       }
 
-      const goal = goalResult.rows[0];
+      const goal = goalRes[0];
 
-      const accountResult = await client.query(
-        `
-          SELECT account_number, balance
-          FROM accounts
-          WHERE account_number = $1
-          FOR UPDATE
-        `,
-        [goal.account_number]
-      );
+      const { data: accountRes, error: accErr } = await supabase
+        .from('accounts')
+        .select('account_number, balance')
+        .eq('account_number', goal.account_number);
 
-      if (accountResult.rows.length === 0) {
+      if (accErr) throw accErr;
+
+      const account = accountRes?.[0];
+
+      if (!account) {
         throw new Error("Conta não encontrada.");
       }
 
-      const account = accountResult.rows[0];
       const accountBalance = Number(account.balance);
 
       if (amount > accountBalance) {
@@ -159,51 +128,35 @@ export class GoalService {
       const remainingAmount = Number(goal.target_amount) - Number(goal.current_amount);
       const depositAmount = Math.min(amount, remainingAmount);
 
-      await client.query(
-        `
-          UPDATE accounts
-          SET balance = balance - $1
-          WHERE account_number = $2
-        `,
-        [depositAmount, goal.account_number]
-      );
+      const { error: accUpdateErr } = await supabase
+        .from('accounts')
+        .update({ balance: accountBalance - depositAmount })
+        .eq('account_number', goal.account_number);
 
-      const updatedGoal = await client.query(
-        `
-          UPDATE goals
-          SET current_amount = current_amount + $1
-          WHERE id = $2
-          RETURNING *
-        `,
-        [depositAmount, goalId]
-      );
+      if (accUpdateErr) throw accUpdateErr;
 
-      await client.query(
-        `
-          INSERT INTO transactions (
-            account_number,
-            amount,
-            type,
-            description
-          )
-          VALUES ($1, $2, $3, $4)
-        `,
-        [
-          goal.account_number,
-          -depositAmount,
-          "goal_deposit",
-          `Depósito para meta: ${goal.name}`
-        ]
-      );
+      const { data: updatedGoalRes, error: goalUpdateErr } = await supabase
+        .from('goals')
+        .update({ current_amount: Number(goal.current_amount) + depositAmount })
+        .eq('id', goalId)
+        .select('*');
 
-      await client.query("COMMIT");
+      if (goalUpdateErr) throw goalUpdateErr;
 
-      return updatedGoal.rows[0];
+      const { error: txErr } = await supabase
+        .from('transactions')
+        .insert([{
+          account_number: goal.account_number,
+          amount: -depositAmount,
+          type: "goal_deposit",
+          description: `Depósito para meta: ${goal.name}`
+        }]);
+
+      if (txErr) throw txErr;
+
+      return updatedGoalRes[0];
     } catch (error) {
-      await client.query("ROLLBACK");
       throw error;
-    } finally {
-      client.release();
     }
   }
 
@@ -213,28 +166,27 @@ export class GoalService {
     monthly_deposit?: number;
     auto_deposit?: boolean;
   }) {
-    const currentGoal = await pool.query(
-      `
-        SELECT *
-        FROM goals
-        WHERE id = $1
-      `,
-      [goalId]
-    );
+    const { data: currentGoalRes, error: fetchErr } = await supabase
+      .from('goals')
+      .select('*')
+      .eq('id', goalId);
 
-    if (currentGoal.rows.length === 0) {
+    if (fetchErr) throw fetchErr;
+    if (!currentGoalRes || currentGoalRes.length === 0) {
       throw new Error("Meta não encontrada.");
     }
 
-    const goal = currentGoal.rows[0];
+    const goal = currentGoalRes[0];
 
     const name = data.name?.trim() || goal.name;
     const targetAmount = data.target_amount ?? Number(goal.target_amount);
     const monthlyDeposit = data.monthly_deposit ?? Number(goal.monthly_deposit);
     const autoDeposit = data.auto_deposit ?? goal.auto_deposit;
-    const nextDepositDate = autoDeposit && !goal.next_deposit_date
-      ? this.getNextDepositDate()
-      : goal.next_deposit_date;
+
+    let nextDepositDate = goal.next_deposit_date;
+    if (autoDeposit && !goal.next_deposit_date) {
+      nextDepositDate = this.getNextDepositDate().toISOString();
+    }
 
     if (!name) {
       throw new Error("O nome da meta é obrigatório.");
@@ -248,140 +200,102 @@ export class GoalService {
       throw new Error("O depósito mensal deve ser maior que zero.");
     }
 
-    const result = await pool.query(
-      `
-        UPDATE goals
-        SET
-          name = $1,
-          target_amount = $2,
-          monthly_deposit = $3,
-          auto_deposit = $4,
-          next_deposit_date = $5
-        WHERE id = $6
-        RETURNING *
-      `,
-      [
+    const { data: result, error: updateErr } = await supabase
+      .from('goals')
+      .update({
         name,
-        targetAmount,
-        monthlyDeposit,
-        autoDeposit,
-        nextDepositDate,
-        goalId
-      ]
-    );
+        target_amount: targetAmount,
+        monthly_deposit: monthlyDeposit,
+        auto_deposit: autoDeposit,
+        next_deposit_date: nextDepositDate
+      })
+      .eq('id', goalId)
+      .select('*');
 
-    return result.rows[0];
+    if (updateErr) throw updateErr;
+    return result[0];
   }
 
   async deleteGoal(goalId: number) {
-    const result = await pool.query(
-      `
-        DELETE FROM goals
-        WHERE id = $1
-        RETURNING *
-      `,
-      [goalId]
-    );
+    const { data, error } = await supabase
+      .from('goals')
+      .delete()
+      .eq('id', goalId)
+      .select('*');
 
-    if (result.rows.length === 0) {
+    if (error) throw error;
+    if (!data || data.length === 0) {
       throw new Error("Meta não encontrada.");
     }
 
-    return result.rows[0];
+    return data[0];
   }
 
   async processAutomaticGoalDeposits() {
-    const client = await pool.connect();
-
     try {
-      await client.query("BEGIN");
+      const todayStr = new Date().toISOString().split('T')[0];
 
-      const goals = await client.query(`
-        SELECT *
-        FROM goals
-        WHERE auto_deposit = true
-          AND next_deposit_date <= CURRENT_DATE
-          AND current_amount < target_amount
-        FOR UPDATE
-      `);
+      const { data: goals, error: goalsErr } = await supabase
+        .from('goals')
+        .select('*')
+        .eq('auto_deposit', true)
+        .lte('next_deposit_date', todayStr);
 
-      for (const goal of goals.rows) {
-        const accountResult = await client.query(
-          `
-            SELECT account_number, balance
-            FROM accounts
-            WHERE account_number = $1
-            FOR UPDATE
-          `,
-          [goal.account_number]
-        );
+      if (goalsErr || !goals) return;
 
-        if (accountResult.rows.length === 0) {
-          continue;
-        }
+      for (const goal of goals) {
+        if (Number(goal.current_amount) >= Number(goal.target_amount)) continue;
 
-        const account = accountResult.rows[0];
+        const { data: accountRes } = await supabase
+          .from('accounts')
+          .select('account_number, balance')
+          .eq('account_number', goal.account_number);
+
+        const account = accountRes?.[0];
+
+        if (!account) continue;
+
         const accountBalance = Number(account.balance);
         const remainingAmount = Number(goal.target_amount) - Number(goal.current_amount);
         const depositAmount = Math.min(Number(goal.monthly_deposit), remainingAmount);
 
+        const currentNextDeposit = new Date(goal.next_deposit_date);
+        currentNextDeposit.setMonth(currentNextDeposit.getMonth() + 1);
+        const updatedNextDepositStr = currentNextDeposit.toISOString().split('T')[0];
+
         if (accountBalance < depositAmount) {
-          await client.query(
-            `
-              UPDATE goals
-              SET next_deposit_date = next_deposit_date + INTERVAL '1 month'
-              WHERE id = $1
-            `,
-            [goal.id]
-          );
+          await supabase
+            .from('goals')
+            .update({ next_deposit_date: updatedNextDepositStr })
+            .eq('id', goal.id);
 
           continue;
         }
 
-        await client.query(
-          `
-            UPDATE accounts
-            SET balance = balance - $1
-            WHERE account_number = $2
-          `,
-          [depositAmount, goal.account_number]
-        );
+        await supabase
+          .from('accounts')
+          .update({ balance: accountBalance - depositAmount })
+          .eq('account_number', goal.account_number);
 
-        await client.query(
-          `
-            UPDATE goals
-            SET current_amount = current_amount + $1,
-                next_deposit_date = next_deposit_date + INTERVAL '1 month'
-            WHERE id = $2
-          `,
-          [depositAmount, goal.id]
-        );
+        await supabase
+          .from('goals')
+          .update({
+            current_amount: Number(goal.current_amount) + depositAmount,
+            next_deposit_date: updatedNextDepositStr
+          })
+          .eq('id', goal.id);
 
-        await client.query(
-          `
-            INSERT INTO transactions (
-              account_number,
-              amount,
-              type,
-              description
-            )
-            VALUES ($1, $2, $3, $4)
-          `,
-          [
-            goal.account_number,
-            -depositAmount,
-            "goal_deposit",
-            `Depósito automático para meta: ${goal.name}`
-          ]
-        );
+        await supabase
+          .from('transactions')
+          .insert([{
+            account_number: goal.account_number,
+            amount: -depositAmount,
+            type: "goal_deposit",
+            description: `Depósito automático para meta: ${goal.name}`
+          }]);
       }
-
-      await client.query("COMMIT");
     } catch (error) {
-      await client.query("ROLLBACK");
       throw error;
-    } finally {
-      client.release();
     }
   }
 }

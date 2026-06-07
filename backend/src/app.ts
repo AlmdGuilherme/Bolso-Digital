@@ -2,7 +2,7 @@ import fastifyJwt from "@fastify/jwt"
 import fastify from "fastify"
 import { AuthController } from "./Controller/AuthController.js"
 import { AccountController } from "./Controller/AccountController.js"
-import { SMSController } from "./Controller/SMSController.js"
+// import { SMSController } from "./Controller/SMSController.js"
 import { TransactionController } from "./Controller/TransactionController.js"
 import { EnvelopeController } from "./Controller/EnvelopeController.js"
 import { EnvelopeService } from "./Service/EnvelopeService.js"
@@ -18,14 +18,6 @@ class App {
     this.config()
     this.routes()
     this.startCronJobs();
-    this.app.listen({ port: 3000, host: '0.0.0.0' }, (err, address) => {
-      if (err) {
-        console.error(err);
-        process.exit(1);
-      }
-      console.log(`Servidor rodando em: ${address}`);
-    });
-
   }
 
   private config() {
@@ -74,7 +66,7 @@ class App {
   routes() {
     const accountController = new AccountController();
     const authController = new AuthController();
-    const smsController = new SMSController();
+    // const smsController = new SMSController();
     const transactionController = new TransactionController();
     const envelopeController = new EnvelopeController();
     const goalController = new GoalController();
@@ -118,17 +110,17 @@ class App {
         await authController.logout(request, reply);
       })
 
-    this.app.post('/phone/send-verification-code', async (request, reply) => {
-      await smsController.sendVerificationCode(request, reply);
-    })
+    // this.app.post('/phone/send-verification-code', async (request, reply) => {
+    //   await smsController.sendVerificationCode(request, reply);
+    // })
 
-    this.app.post('/phone/resend-verification-code', async (request, reply) => {
-      await smsController.resendVerificationCode(request, reply);
-    })
+    // this.app.post('/phone/resend-verification-code', async (request, reply) => {
+    //   await smsController.resendVerificationCode(request, reply);
+    // })
 
-    this.app.post('/phone/validate-code', async (request, reply) => {
-      await smsController.validateCode(request, reply);
-    })
+    // this.app.post('/phone/validate-code', async (request, reply) => {
+    //   await smsController.validateCode(request, reply);
+    // })
 
     this.app.post('/transactions', async (request, reply) => {
       await transactionController.CreateTransaction(request, reply);
@@ -178,6 +170,10 @@ class App {
       await transactionController.ExportTransactionsCSV(request, reply);
     });
 
+    this.app.get('/transactions/fraud-alerts/:accountNumber', async (request, reply) => {
+      await transactionController.GetFraudAlerts(request, reply)
+    })
+
     this.app.get('/categories', async (request, reply) => {
       await transactionController.GetCategories(request, reply);
     });
@@ -210,8 +206,8 @@ class App {
       await goalController.GetGoalsByAccount(request, reply)
     })
 
-    this.app.post('/accounts/goals/:goalId/deposit', async (requst, reply) => {
-      await goalController.DepositToGoal(requst, reply)
+    this.app.post('/accounts/goals/:goalId/deposit', async (request, reply) => {
+      await goalController.DepositToGoal(request, reply)
     })
 
     this.app.delete('/accounts/goals/:goalId/delete', async (request, reply) => {
@@ -229,6 +225,15 @@ class App {
     this.app.post('/accounts/:accountNumber/achievements/unlock', async (request, reply) => {
       await gamingBadgeController.UnlockAchievement(request, reply);
     });
+
+    this.app.get('/accounts/:accountNumber/suggested-geofences', async (request, reply) => {
+      await transactionController.GetSuggestedGeofences(request, reply);
+    })
+
+  }
+
+  public getInstance() {
+    return this.app;
   }
 }
 

@@ -1,25 +1,28 @@
-import pg from 'pg';
+import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
 
-const { Pool }  = pg;
+dotenv.config();
 
-export const pool = new Pool({
-  host: 'localhost',
-  port: 5432,
-  user: 'postgres',
-  password: '11631021',
-  database: 'postgres',
-  idleTimeoutMillis: 30000
-})
-
-const connectDB =  async () => {
-  try {
-    const client = await pool.connect();
-    console.log("Conectado ao Banco de Dados com sucesso!");
-    client.release();
-  } catch (err) {
-    console.error(`Erro ao conectar ao banco da dados: ${err}`)
-    process.exit(1)
-  }
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY; 
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error('Faltam as variáveis de ambiente do Supabase no arquivo .env ou no painel da Vercel.');
 }
 
-export { connectDB }
+export const supabase = createClient(supabaseUrl, supabaseKey);
+const connectDB = async () => {
+  try {
+    const { error } = await supabase.from('usuarios').select('id').limit(1);
+
+    if (error && error.code !== '42P01' && error.code !== 'PGRST116') {
+      throw error;
+    }
+
+    console.log("Comunicação com a API do Supabase configurada com sucesso!");
+  } catch (err) {
+    console.error(`Erro ao testar comunicação com o Supabase: ${err}`);
+    process.exit(1);
+  }
+};
+
+export { connectDB };

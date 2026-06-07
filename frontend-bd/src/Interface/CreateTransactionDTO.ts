@@ -1,4 +1,4 @@
-export interface CreateTransactionDTO {
+interface CreateTransactionDTO {
   account_number: string;
   description: string;
   amount: number;
@@ -13,3 +13,5 @@ export interface CreateTransactionDTO {
   longitude?: number;
   location_name?: string;
 }
+
+export type { CreateTransactionDTO };

@@ -1,284 +1,326 @@
-const ADDRESS_INTSERT = `
-  INSERT INTO address (cep, street, neighborhood, city, state, number, complement)
-  VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id
-`;
+import { supabase } from './database.js';
 
-const USER_INSERT = `
-  INSERT INTO users (name, surname, birth_date, cpf, address_id)
-  VALUES ($1, $2, $3, $4, $5) RETURNING id
-`
+export const ADDRESS_INTSERT = async (addressData: {
+  cep: string;
+  street: string;
+  neighborhood: string;
+  city: string;
+  state: string;
+  number: string | number;
+  complement: string | null | undefined;
+}) => {
+  return await supabase
+    .from('address')
+    .insert([addressData])
+    .select('id')
+    .single();
+};
+export const USER_INSERT = async (userData: {
+  name: string;
+  surname: string;
+  birth_date: string;
+  cpf: string;
+  address_id: any;
+}) => {
+  return await supabase
+    .from('users')
+    .insert([userData])
+    .select('id')
+    .single();
+};
 
-const ACCOUNT_INSERT = `
-  INSERT INTO accounts (account_number, email, password, pin, phone, user_id)
-  VALUES ($1, $2, $3, $4, $5, $6)
-`
+export const ACCOUNT_INSERT = async (accountData: {
+  account_number: any;
+  email: string;
+  password: string;
+  pin: string;
+  phone: string;
+  user_id: any;
+}) => {
+  return await supabase
+    .from('accounts')
+    .insert([accountData]);
+};
 
-const VERIFY_EMAIL = `
-  SELECT email FROM accounts
-  WHERE email = $1
-`
+export const VERIFY_EMAIL = async (email: string) => {
+  return await supabase
+    .from('accounts')
+    .select('email')
+    .eq('email', email);
+};
 
-const VERIFY_CPF = `
-  SELECT cpf FROM users
-  WHERE cpf = $1
-`;
+export const VERIFY_CPF = async (cpf: string) => {
+  return await supabase
+    .from('users')
+    .select('cpf')
+    .eq('cpf', cpf);
+};
 
-const VERIFY_PHONE = `
-  SELECT phone FROM accounts 
-  WHERE phone = $1
-`
+export const VERIFY_PHONE = async (phone: string) => {
+  return await supabase
+    .from('accounts')
+    .select('phone')
+    .eq('phone', phone);
+};
 
-const LOGIN_QUERY = `
-  SELECT 
-    a.user_id,
-    a.email, 
-    a.password, 
-    a.pin,
-    u.name  -- Agora buscamos o nome da tabela de usuários
-  FROM accounts a
-  INNER JOIN users u ON a.user_id = u.id -- Faz a ligação entre as tabelas
-  WHERE a.email = $1
-`
+export const LOGIN_QUERY = async (email: string) => {
+  return await supabase
+    .from('accounts')
+    .select('user_id, email, password, pin, users ( name )')
+    .eq('email', email)
+    .single();
+};
 
-const GET_USER = `
-  SELECT 
-    u.name,
-    u.surname,
-    u.cpf,
-    a.email
-  FROM users u
-  INNER JOIN accounts a ON u.id = a.user_id
-  WHERE u.id = $1
-`
+export const GET_USER = async (userId: number) => {
+  return await supabase
+    .from('users')
+    .select('name, surname, cpf, accounts ( email )')
+    .eq('id', userId)
+    .single();
+};
 
-const GET_USER_DATA = `
-  SELECT 
-    u.id,
-    u.name,
-    u.surname,
-    u.cpf,
-    a.email,
-    a.password,
-    a.pin,
-    a.phone
-  FROM users u
-  INNER JOIN accounts a ON u.id = a.user_id
-  WHERE u.id = $1
-`
-const GET_USER_ACCOUNT = `
-    SELECT 
-      u.id,
-      u.name,
-      u.surname,
-      u.cpf,
-      a.email,
-      a.account_number,
-      a.balance,
-      a.phone
-  FROM users u
-  INNER JOIN accounts a ON u.id = a.user_id
-  WHERE u.id = $1;
-`
+export const GET_USER_DATA = async (userId: number) => {
+  return await supabase
+    .from('users')
+    .select('id, name, surname, cpf, accounts ( email, password, pin, phone, account_number, balance )')
+    .eq('id', userId)
+    .single();
+};
 
-const UPDATE_USER_DATA = `
-  UPDATE users
-  SET name = $1,
-    surname = $2,
-    cpf = $3
-WHERE id = $4
-`
+export const GET_USER_ACCOUNT = async (userId: number) => {
+  return await supabase
+    .from('users')
+    .select('id, name, surname, cpf, accounts ( email, account_number, balance, phone )')
+    .eq('id', userId)
+    .single();
+};
 
-const UPDATE_ACCOUNT_DATA = `
-  UPDATE accounts
-  SET email = $1,
-    password = $2,
-    pin = $3,
-    phone = $4
-  WHERE user_id = $5
-`
+export const UPDATE_USER_DATA = async (
+  userId: number,
+  updatedData: { name: string; surname: string; cpf: string }
+) => {
+  return await supabase
+    .from('users')
+    .update(updatedData)
+    .eq('id', userId);
+};
 
-const DELETE_USER = `
-  DELETE FROM users
-  WHERE id = $1
-  RETURNING address_id
-`
+export const UPDATE_ACCOUNT_DATA = async (
+  userId: number,
+  updatedData: { email: string; password?: string; pin?: string; phone: string }
+) => {
+  return await supabase
+    .from('accounts')
+    .update(updatedData)
+    .eq('user_id', userId);
+};
 
-const DELETE_ADDRESS = `
-  DELETE FROM address
-  WHERE id = $1
-`
+export const DELETE_USER = async (userId: number) => {
+  return await supabase
+    .from('users')
+    .delete()
+    .eq('id', userId)
+    .select('address_id')
+    .single();
+};
 
-const UPDATE_SESSION_QUERY = `
-  UPDATE accounts 
-  SET refresh_token = $1, 
-      token_expires_at = $2 
-  WHERE id = $3
-`;
+export const DELETE_ADDRESS = async (addressId: number) => {
+  return await supabase
+    .from('address')
+    .delete()
+    .eq('id', addressId);
+};
 
-const REMOVE_SESSION_QUERY = `
-  UPDATE accounts 
-  SET refresh_token = NULL, 
-      token_expires_at = NULL 
-  WHERE id = $1
-`;
+export const UPDATE_SESSION_QUERY = async (
+  accountId: number,
+  tokenData: { refresh_token: string; token_expires_at: string }
+) => {
+  return await supabase
+    .from('accounts')
+    .update(tokenData)
+    .eq('id', accountId);
+};
 
-const UPSERT_VERIFICATION = `
-INSERT INTO phone_verifications (phone, code, expires_at)
-VALUES ($1, $2, $3)
-ON CONFLICT (phone) 
-DO UPDATE SET 
-    code = EXCLUDED.code, 
-    expires_at = EXCLUDED.expires_at,
-    created_at = CURRENT_TIMESTAMP;
-`
+export const REMOVE_SESSION_QUERY = async (accountId: number) => {
+  return await supabase
+    .from('accounts')
+    .update({ refresh_token: null, token_expires_at: null })
+    .eq('id', accountId);
+};
 
-const VERIFY_CODE = `
-  SELECT code FROM phone_verifications 
-  WHERE phone = $1 
-`
+export const UPSERT_VERIFICATION = async (verificationData: {
+  phone: string;
+  code: string;
+  expires_at: string;
+}) => {
+  return await supabase
+    .from('phone_verifications')
+    .upsert(
+      {
+        phone: verificationData.phone,
+        code: verificationData.code,
+        expires_at: verificationData.expires_at,
+        created_at: new Date().toISOString()
+      },
+      { onConflict: 'phone' }
+    );
+};
 
-const DELETE_SMS_CODE = `
-  DELETE FROM phone_verifications 
-  WHERE phone = $1;
-`
+export const VERIFY_CODE = async (phone: string) => {
+  return await supabase
+    .from('phone_verifications')
+    .select('code')
+    .eq('phone', phone);
+};
 
-const DOES_PHONE_EXISTS = `
-  SELECT id FROM accounts 
-  WHERE phone = $1
-`
+export const DELETE_SMS_CODE = async (phone: string) => {
+  return await supabase
+    .from('phone_verifications')
+    .delete()
+    .eq('phone', phone);
+};
 
-const GET_DASHBOARD_DATA = `
-  SELECT 
-        TO_CHAR(created_at, 'DD/MM') as label, 
-        SUM(amount) as value 
-      FROM transactions 
-      WHERE account_number = $1 
-        AND type = 'expense' 
-        AND created_at >= CURRENT_DATE - INTERVAL '30 days'
-      GROUP BY label 
-      ORDER BY MIN(created_at) ASC;
-`
+export const DOES_PHONE_EXISTS = async (phone: string) => {
+  return await supabase
+    .from('accounts')
+    .select('id')
+    .eq('phone', phone);
+};
 
-const GET_BALANCE_EVOLUTION = `
-  SELECT 
-    to_char(created_at, 'DD/MM') AS label,
-    SUM(SUM(amount)) OVER (ORDER BY date_trunc('day', created_at)) AS value
-  FROM transactions
-  WHERE account_number = $1
-  GROUP BY date_trunc('day', created_at), to_char(created_at, 'DD/MM')
-  ORDER BY date_trunc('day', created_at) ASC;
-`
+export const GET_DASHBOARD_DATA = async (accountNumber: string) => {
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-const GET_INCOME_EVOLUTION = `
-  SELECT to_char(created_at, 'DD/MM') AS label, SUM(amount) AS value
-    FROM transactions 
-    WHERE account_number = $1 AND type = 'income'
-    GROUP BY date_trunc('day', created_at), to_char(created_at, 'DD/MM')
-    ORDER BY date_trunc('day', created_at) ASC;
-`
+  return await supabase
+    .rpc('get_dashboard_data_custom', {
+      p_account_number: accountNumber,
+      p_start_date: thirtyDaysAgo.toISOString()
+    });
+};
 
-const GET_EXPENSE_EVOLUTION = `
-SELECT to_char(created_at, 'DD/MM') AS label, SUM(ABS(amount)) AS value
-    FROM transactions 
-    WHERE account_number = $1 AND type = 'expense'
-    GROUP BY date_trunc('day', created_at), to_char(created_at, 'DD/MM')
-    ORDER BY date_trunc('day', created_at) ASC;
-`
+export const GET_BALANCE_EVOLUTION = async (accountNumber: string) => {
+  return await supabase
+    .rpc('get_balance_evolution_custom', { p_account_number: accountNumber });
+};
 
-const GET_SUMMARY_EVOLUTION = `
-  SELECT 
-      type, 
-      SUM(ABS(amount)) as total 
-    FROM transactions 
-    WHERE account_number = $1
-    GROUP BY type;
-`
+export const GET_INCOME_EVOLUTION = async (accountNumber: string) => {
+  return await supabase
+    .rpc('get_income_evolution_custom', { p_account_number: accountNumber });
+};
 
-const CREATE_TRASACTION = `
-  INSERT INTO transactions (
-  account_number,
-    description,
-    amount,
-    type,
-    category,
-    subcategory,
-    category_id,
-    subcategory_id,
-    envelope_id,
-    status
-  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-  RETURNING *;
-`
+export const GET_EXPENSE_EVOLUTION = async (accountNumber: string) => {
+  return await supabase
+    .rpc('get_expense_evolution_custom', { p_account_number: accountNumber });
+};
 
-const GET_DAILY_EXPENSES = `
-  SELECT 
-    TO_CHAR(created_at, 'Day') AS day,
-    SUM(amount) AS total
-  FROM transactions
-  WHERE account_number = $1
-    AND type = 'expense'
-  GROUP BY day
-  ORDER BY MIN(EXTRACT(DOW FROM created_at));
-`
+export const GET_SUMMARY_EVOLUTION = async (accountNumber: string) => {
+  return await supabase
+    .from('transactions')
+    .select('type, amount')
+    .eq('account_number', accountNumber);
+};
 
-const GET_TRANSACTIONS_BY_ACCOUNT = `
-  SELECT 
-    t.*,
-    CASE 
-      WHEN COUNT(tr.id) > 0 THEN true
-      ELSE false
-    END AS has_receipt
-  FROM transactions t
-  LEFT JOIN transaction_receipts tr
-    ON tr.transaction_id = t.id
-  WHERE t.account_number = $1
-  GROUP BY t.id
-  ORDER BY t.created_at DESC;
-`;
+export const CREATE_TRASACTION = async (transactionData: {
+  account_number: string;
+  description: string;
+  amount: number;
+  type: string;
+  category: string | null;
+  subcategory: string | null;
+  category_id: number | null;
+  subcategory_id: number | null;
+  envelope_id: number | null;
+  status: string;
+}) => {
+  return await supabase
+    .from('transactions')
+    .insert([transactionData])
+    .select('*');
+};
 
-const GET_CONCLUDED_EXPENSES = `
-  SELECT 
-  id,
-  description,
-  amount,
-  category,
-  subcategory,
-  created_at
-FROM transactions
-WHERE account_number = $1
-AND type = 'expense'
-AND status = 'completed'
-ORDER BY created_at DESC;
-`
+export const GET_DAILY_EXPENSES = async (accountNumber: string) => {
+  return await supabase
+    .rpc('get_daily_expenses_custom', { p_account_number: accountNumber });
+};
 
-export {
-  ADDRESS_INTSERT,
-  USER_INSERT,
-  ACCOUNT_INSERT,
-  VERIFY_EMAIL,
-  VERIFY_CPF,
-  VERIFY_PHONE,
-  LOGIN_QUERY,
-  GET_USER,
-  GET_USER_DATA,
-  GET_USER_ACCOUNT,
-  UPDATE_USER_DATA,
-  UPDATE_ACCOUNT_DATA,
-  DELETE_USER,
-  DELETE_ADDRESS,
-  UPDATE_SESSION_QUERY,
-  REMOVE_SESSION_QUERY,
-  UPSERT_VERIFICATION,
-  VERIFY_CODE,
-  DELETE_SMS_CODE,
-  DOES_PHONE_EXISTS,
-  GET_DASHBOARD_DATA,
-  GET_BALANCE_EVOLUTION,
-  GET_INCOME_EVOLUTION,
-  GET_EXPENSE_EVOLUTION,
-  GET_SUMMARY_EVOLUTION,
-  CREATE_TRASACTION,
-  GET_DAILY_EXPENSES,
-  GET_TRANSACTIONS_BY_ACCOUNT,
-  GET_CONCLUDED_EXPENSES
+export const GET_TRANSACTIONS_BY_ACCOUNT = async (accountNumber: string) => {
+  return await supabase
+    .from('transactions')
+    .select('*, transaction_receipts(id)')
+    .eq('account_number', accountNumber)
+    .order('created_at', { ascending: false });
+};
+
+export const GET_CONCLUDED_EXPENSES = async (accountNumber: string) => {
+  return await supabase
+    .from('transactions')
+    .select('id, description, amount, category, subcategory, created_at')
+    .eq('account_number', accountNumber)
+    .eq('type', 'expense')
+    .eq('status', 'completed')
+    .order('created_at', { ascending: false });
+};
+
+export const INSERT_TRANSACTION_LOCATION = async (locationData: {
+  transaction_id: any;
+  latitude: number;
+  longitude: number;
+  location_name: string | null;
+}) => {
+  return await supabase
+    .from('transaction_locations')
+    .insert([locationData]);
+};
+
+export const GET_SUGGESTED_GEOFENCES = async (accountNumber: string) => {
+  return await supabase
+    .rpc('get_suggested_geofences_custom', { p_account_number: accountNumber });
+};
+
+export const GET_RECENT_TRANSACTIONS_WITH_LOCATION = async (
+  accountNumber: string,
+  transactionId: number
+) => {
+  const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+
+  return await supabase
+    .from('transactions')
+    .select('id, created_at, transaction_locations(latitude, longitude)')
+    .eq('account_number', accountNumber)
+    .neq('id', transactionId)
+    .eq('type', 'expense')
+    .gte('created_at', fifteenMinutesAgo);
+};
+
+export const CREATE_FRAUD_ALERT = async (alertData: {
+  account_number: string;
+  transaction_id: number;
+  compared_transaction_id: number;
+  distance_km: number;
+  time_difference_minutes: number;
+  message: string;
+}) => {
+  return await supabase
+    .from('fraud_alerts')
+    .insert([alertData]);
+};
+
+export const CHECK_FRAUD_ALERT_EXISTS = async (
+  transactionId: number,
+  comparedTransactionId: number
+) => {
+  return await supabase
+    .from('fraud_alerts')
+    .select('id')
+    .eq('transaction_id', transactionId)
+    .eq('compared_transaction_id', comparedTransactionId)
+    .limit(1);
+};
+
+export const GET_FRAUD_ALERTS = async (accountNumber: string) => {
+  return await supabase
+    .from('fraud_alerts')
+    .select('*')
+    .eq('account_number', accountNumber)
+    .order('created_at', { ascending: false });
 };

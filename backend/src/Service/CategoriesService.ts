@@ -1,28 +1,26 @@
-import { pool } from "../database/database.js";
+import { supabase } from "../database/database.js";
 
 class CategoriesService {
   async getCategories() {
-    const query = `
-    SELECT id, name
-    FROM categories
-    ORDER BY name ASC
-  `;
+    const { data, error } = await supabase
+      .from('categories')
+      .select('id, name')
+      .order('name', { ascending: true });
 
-    const result = await pool.query(query);
-    return result.rows;
+    if (error) throw error;
+    return data || [];
   }
 
   async getSubcategoriesByCategory(categoryId: number) {
-    const query = `
-    SELECT id, name, category_id
-    FROM subcategories
-    WHERE category_id = $1
-    ORDER BY name ASC
-  `;
+    const { data, error } = await supabase
+      .from('subcategories')
+      .select('id, name, category_id')
+      .eq('category_id', categoryId)
+      .order('name', { ascending: true });
 
-    const result = await pool.query(query, [categoryId]);
-    return result.rows;
+    if (error) throw error;
+    return data || [];
   }
 }
 
-export { CategoriesService }
+export { CategoriesService };

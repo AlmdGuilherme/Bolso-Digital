@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@fastify/jwt": "^10.0.0",
+    "@supabase/supabase-js": "^2.107.0",
     "argon2": "^0.44.0",
     "dotenv": "^17.3.1",
     "fastify": "^5.8.4",

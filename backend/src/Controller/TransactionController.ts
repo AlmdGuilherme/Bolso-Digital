@@ -232,4 +232,31 @@ export class TransactionController {
       });
     }
   }
+
+  async GetSuggestedGeofences(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const { accountNumber } = request.params as { accountNumber: string };
+
+      const geofences = await this.transactionService.getSuggestedGeofences(
+        accountNumber
+      );
+
+      return reply.status(200).send(geofences);
+    } catch (error: any) {
+      return reply.status(400).send({ message: error.message });
+    }
+  }
+
+  async GetFraudAlerts(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const { accountNumber } = request.params as {
+        accountNumber: string;
+      };
+      const alerts = await this.transactionService.getFraudAlerts(accountNumber);
+
+      return reply.status(200).send(alerts);
+    } catch (error: any) {
+      return reply.status(400).send({ message: error.message });
+    }
+  }
 }

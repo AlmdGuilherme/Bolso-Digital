@@ -1,102 +1,117 @@
-import { pool } from '../database/database.js';
+import { supabase } from '../database/database.js';
 
 export class GamingBadgeService {
   async unlockAchievement(accountNumber: string, achievementCode: string) {
-    const achievementResult = await pool.query(
-      `
-      SELECT id
-      FROM achievements
-      WHERE code = $1
-      `,
-      [achievementCode]
-    );
+    const { data: achievementResult, error: achError } = await supabase
+      .from('achievements')
+      .select('id')
+      .eq('code', achievementCode);
 
-    if (achievementResult.rows.length === 0) {
+    if (achError) throw achError;
+
+    const achievement = achievementResult?.[0];
+
+    if (!achievement) {
       throw new Error('Conquista não encontrada.');
     }
 
-    const achievementId = achievementResult.rows[0].id;
+    const achievementId = achievement.id;
 
-    const alreadyUnlocked = await pool.query(
-      `
-      SELECT id
-      FROM account_achievements
-      WHERE account_number = $1
-      AND achievement_id = $2
-      `,
-      [accountNumber, achievementId]
-    );
+    const { data: alreadyUnlocked, error: checkError } = await supabase
+      .from('account_achievements')
+      .select('id')
+      .eq('account_number', accountNumber)
+      .eq('achievement_id', achievementId);
 
-    if (alreadyUnlocked.rows.length > 0) {
+    if (checkError) throw checkError;
+    if (alreadyUnlocked && alreadyUnlocked.length > 0) {
       return {
         unlocked: false,
         message: 'Conquista já desbloqueada.',
       };
     }
 
-    const result = await pool.query(
-      `
-      INSERT INTO account_achievements (
-        account_number,
-        achievement_id
-      )
-      VALUES ($1, $2)
-      RETURNING *
-      `,
-      [accountNumber, achievementId]
-    );
+    const { data: result, error: insertError } = await supabase
+      .from('account_achievements')
+      .insert([{ account_number: accountNumber, achievement_id: achievementId }])
+      .select('*');
+
+    if (insertError) throw insertError;
 
     return {
       unlocked: true,
-      achievement: result.rows[0],
+      achievement: result[0],
     };
   }
 
   async getAccountAchievements(accountNumber: string) {
-    const result = await pool.query(
-      `
-      SELECT
-        a.id,
-        a.code,
-        a.title,
-        a.description,
-        a.icon,
-        aa.unlocked_at
-      FROM account_achievements aa
-      INNER JOIN achievements a
-        ON a.id = aa.achievement_id
-      WHERE aa.account_number = $1
-      ORDER BY aa.unlocked_at DESC
-      `,
-      [accountNumber]
-    );
+    const { data, error } = await supabase
+      .from('account_achievements')
+      .select(`
+        unlocked_at,
+        achievements!inner (
+          id,
+          code,
+          title,
+          description,
+          icon
+        )
+      `)
+      .eq('account_number', accountNumber)
+      .order('unlocked_at', { ascending: false });
 
-    return result.rows;
+    if (error) throw error;
+
+    return (data || []).map((row: any) => {
+      const ach = Array.isArray(row.achievements) ? row.achievements[0] : row.achievements;
+      return {
+        id: ach?.id,
+        code: ach?.code,
+        title: ach?.title,
+        description: ach?.description,
+        icon: ach?.icon,
+        unlocked_at: row.unlocked_at
+      };
+    });
   }
 
   async getAllAchievements(accountNumber: string) {
-    const result = await pool.query(
-      `
-      SELECT
-        a.id,
-        a.code,
-        a.title,
-        a.description,
-        a.icon,
-        aa.unlocked_at,
-        CASE
-          WHEN aa.id IS NOT NULL THEN true
-          ELSE false
-        END AS unlocked
-      FROM achievements a
-      LEFT JOIN account_achievements aa
-        ON aa.achievement_id = a.id
-        AND aa.account_number = $1
-      ORDER BY unlocked DESC, a.id ASC
-      `,
-      [accountNumber]
-    );
+    const { data, error } = await supabase
+      .from('achievements')
+      .select(`
+        id,
+        code,
+        title,
+        description,
+        icon,
+        account_achievements (
+          id,
+          unlocked_at,
+          account_number
+        )
+      `)
+      .order('id', { ascending: true });
 
-    return result.rows;
+    if (error) throw error;
+
+    const mapped = (data || []).map((ach: any) => {
+      const aaList = Array.isArray(ach.account_achievements)
+        ? ach.account_achievements
+        : [ach.account_achievements].filter(Boolean);
+
+      const userAchievement = aaList.find((aa: any) => aa.account_number === accountNumber);
+
+      return {
+        id: ach.id,
+        code: ach.code,
+        title: ach.title,
+        description: ach.description,
+        icon: ach.icon,
+        unlocked_at: userAchievement ? userAchievement.unlocked_at : null,
+        unlocked: !!userAchievement
+      };
+    });
+
+    return mapped.sort((a, b) => Number(b.unlocked) - Number(a.unlocked));
   }
 }

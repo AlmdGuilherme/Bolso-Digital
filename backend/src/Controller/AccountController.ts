@@ -39,6 +39,8 @@ class AccountController {
       })
 
     } catch (error: any) {
+      console.error("🔥 ERRO INTERNO DO BACKEND:", error.stack);
+      console.error("🔥 OBJETO BRUTO:", error);
       return reply.status(400).send({
         message: error.message || 'Erro ao cadastrar usuário!'
       })
